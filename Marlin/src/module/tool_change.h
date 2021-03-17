@@ -1,6 +1,6 @@
 /**
  * Marlin 3D Printer Firmware
- * Copyright (c) 2020 MarlinFirmware [https://github.com/MarlinFirmware/Marlin]
+ * Copyright (c) 2019 MarlinFirmware [https://github.com/MarlinFirmware/Marlin]
  *
  * Based on Sprinter and grbl.
  * Copyright (c) 2011 Camiel Gubbels / Erik van der Zalm
@@ -16,52 +16,28 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
 #pragma once
 
-#include "../inc/MarlinConfig.h"
+#include "../inc/MarlinConfigPre.h"
 
-//#define DEBUG_TOOLCHANGE_MIGRATION_FEATURE
-
-#if HAS_MULTI_EXTRUDER
+#if EXTRUDERS > 1
 
   typedef struct {
     #if ENABLED(TOOLCHANGE_FILAMENT_SWAP)
-      float swap_length, extra_prime, extra_resume;
-      int16_t prime_speed, retract_speed, unretract_speed, fan, fan_speed, fan_time;
+      float swap_length, extra_prime;
+      int16_t prime_speed, retract_speed;
     #endif
     #if ENABLED(TOOLCHANGE_PARK)
-      bool enable_park;
-      xy_pos_t change_point;
+      struct { float x, y; } change_point;
     #endif
     float z_raise;
   } toolchange_settings_t;
 
   extern toolchange_settings_t toolchange_settings;
 
-  #if ENABLED(TOOLCHANGE_FILAMENT_SWAP)
-    extern void tool_change_prime();
-  #endif
-
-  #if ENABLED(TOOLCHANGE_FS_PRIME_FIRST_USED)
-    extern bool enable_first_prime;
-  #endif
-
-  #if ENABLED(TOOLCHANGE_FS_INIT_BEFORE_SWAP)
-    extern bool toolchange_extruder_ready[EXTRUDERS];
-  #endif
-
-  #if ENABLED(TOOLCHANGE_MIGRATION_FEATURE)
-    typedef struct {
-      uint8_t target, last;
-      bool automode, in_progress;
-    } migration_settings_t;
-    constexpr migration_settings_t migration_defaults = { 0, 0, false, false };
-    extern migration_settings_t migration;
-    bool extruder_migration();
-  #endif
 #endif
 
 #if DO_SWITCH_EXTRUDER
@@ -79,28 +55,28 @@
 
 #if ENABLED(PARKING_EXTRUDER)
 
-  #define PE_MAGNET_ON_STATE TERN_(PARKING_EXTRUDER_SOLENOIDS_INVERT, !)PARKING_EXTRUDER_SOLENOIDS_PINS_ACTIVE
+  #if ENABLED(PARKING_EXTRUDER_SOLENOIDS_INVERT)
+    #define PE_MAGNET_ON_STATE !PARKING_EXTRUDER_SOLENOIDS_PINS_ACTIVE
+  #else
+    #define PE_MAGNET_ON_STATE PARKING_EXTRUDER_SOLENOIDS_PINS_ACTIVE
+  #endif
 
-  void pe_solenoid_set_pin_state(const uint8_t extruder_num, const uint8_t state);
+  void pe_set_solenoid(const uint8_t extruder_num, const uint8_t state);
 
-  inline void pe_solenoid_magnet_on(const uint8_t extruder_num)  { pe_solenoid_set_pin_state(extruder_num,  PE_MAGNET_ON_STATE); }
-  inline void pe_solenoid_magnet_off(const uint8_t extruder_num) { pe_solenoid_set_pin_state(extruder_num, !PE_MAGNET_ON_STATE); }
+  inline void pe_activate_solenoid(const uint8_t extruder_num) { pe_set_solenoid(extruder_num, PE_MAGNET_ON_STATE); }
+  inline void pe_deactivate_solenoid(const uint8_t extruder_num) { pe_set_solenoid(extruder_num, !PE_MAGNET_ON_STATE); }
 
   void pe_solenoid_init();
-
-  extern bool extruder_parked;
-  inline void parking_extruder_set_parked(const bool parked) { extruder_parked = parked; }
-  bool parking_extruder_unpark_after_homing(const uint8_t final_tool, bool homed_towards_final_tool);
 
 #elif ENABLED(MAGNETIC_PARKING_EXTRUDER)
 
   typedef struct MPESettings {
-      float parking_xpos[2],      // M951 L R
-            grab_distance;        // M951 I
- feedRate_t slow_feedrate,        // M951 J
-            fast_feedrate;        // M951 H
-      float travel_distance,      // M951 D
-            compensation_factor;  // M951 C
+    float parking_xpos[2],      // M951 L R
+          grab_distance,        // M951 I
+          slow_feedrate,        // M951 J
+          fast_feedrate,        // M951 H
+          travel_distance,      // M951 D
+          compensation_factor;  // M951 C
   } mpe_settings_t;
 
   extern mpe_settings_t mpe_settings;
@@ -109,9 +85,16 @@
 
 #endif
 
-TERN_(ELECTROMAGNETIC_SWITCHING_TOOLHEAD, void est_init());
+#if ENABLED(SINGLENOZZLE)
+  extern uint16_t singlenozzle_temp[EXTRUDERS];
+  #if FAN_COUNT > 0
+    extern uint8_t singlenozzle_fan_speed[EXTRUDERS];
+  #endif
+#endif
 
-TERN_(SWITCHING_TOOLHEAD, void swt_init());
+#if ENABLED(ELECTROMAGNETIC_SWITCHING_TOOLHEAD)
+  void est_init();
+#endif
 
 /**
  * Perform a tool-change, which may result in moving the

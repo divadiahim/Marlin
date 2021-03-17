@@ -1,6 +1,6 @@
 /**
  * Marlin 3D Printer Firmware
- * Copyright (c) 2020 MarlinFirmware [https://github.com/MarlinFirmware/Marlin]
+ * Copyright (c) 2019 MarlinFirmware [https://github.com/MarlinFirmware/Marlin]
  *
  * Based on Sprinter and grbl.
  * Copyright (c) 2011 Camiel Gubbels / Erik van der Zalm
@@ -16,7 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
 #pragma once
@@ -31,15 +31,7 @@
 
 //#define DEBUG_GCODE_PARSER
 #if ENABLED(DEBUG_GCODE_PARSER)
-  #include "../libs/hex_print.h"
-#endif
-
-#if ENABLED(TEMPERATURE_UNITS_SUPPORT)
-  typedef enum : uint8_t { TEMPUNIT_C, TEMPUNIT_K, TEMPUNIT_F } TempUnit;
-#endif
-
-#if ENABLED(INCH_MODE_SUPPORT)
-  typedef enum : uint8_t { LINEARUNIT_MM, LINEARUNIT_INCH } LinearUnit;
+  #include "../libs/hex_print_routines.h"
 #endif
 
 /**
@@ -84,7 +76,7 @@ public:
   static char *command_ptr,               // The command, so it can be echoed
               *string_arg,                // string of command line
               command_letter;             // G, M, or T
-  static uint16_t codenum;                // 123
+  static int codenum;                     // 123
   #if USE_GCODE_SUBCODES
     static uint8_t subcode;               // .1
   #endif
@@ -114,11 +106,6 @@ public:
     return valid_signless(p) || ((p[0] == '-' || p[0] == '+') && valid_signless(&p[1])); // [-+]?.?[0-9]
   }
 
-  FORCE_INLINE static bool valid_number(const char * const p) {
-    // TODO: With MARLIN_DEV_MODE allow HEX values starting with "x"
-    return valid_float(p);
-  }
-
   #if ENABLED(FASTER_GCODE_PARSER)
 
     FORCE_INLINE static bool valid_int(const char * const p) {
@@ -133,9 +120,9 @@ public:
       param[ind] = ptr ? ptr - command_ptr : 0;  // parameter offset or 0
       #if ENABLED(DEBUG_GCODE_PARSER)
         if (codenum == 800) {
-          SERIAL_ECHOPAIR("Set bit ", ind, " of codebits (", hex_address((void*)(codebits >> 16)));
+          SERIAL_ECHOPAIR("Set bit ", (int)ind, " of codebits (", hex_address((void*)(codebits >> 16)));
           print_hex_word((uint16_t)(codebits & 0xFFFF));
-          SERIAL_ECHOLNPAIR(") | param = ", param[ind]);
+          SERIAL_ECHOLNPAIR(") | param = ", (int)param[ind]);
         }
       #endif
     }
@@ -147,12 +134,8 @@ public:
       if (ind >= COUNT(param)) return false; // Only A-Z
       const bool b = TEST32(codebits, ind);
       if (b) {
-        if (param[ind]) {
-          char * const ptr = command_ptr + param[ind];
-          value_ptr = valid_number(ptr) ? ptr : nullptr;
-        }
-        else
-          value_ptr = nullptr;
+        char * const ptr = command_ptr + param[ind];
+        value_ptr = param[ind] && valid_float(ptr) ? ptr : nullptr;
       }
       return b;
     }
@@ -175,6 +158,7 @@ public:
     #ifdef CPU_32_BIT
       FORCE_INLINE static bool seen(const char * const str) { return !!(codebits & letter_bits(str)); }
     #else
+      // At least one of a list of code letters was seen
       FORCE_INLINE static bool seen(const char * const str) {
         const uint32_t letrbits = letter_bits(str);
         const uint8_t * const cb = (uint8_t*)&codebits;
@@ -185,40 +169,27 @@ public:
 
     static inline bool seen_any() { return !!codebits; }
 
-    FORCE_INLINE static bool seen_test(const char c) { return TEST32(codebits, LETTER_BIT(c)); }
+    #define SEEN_TEST(L) TEST32(codebits, LETTER_BIT(L))
 
   #else // !FASTER_GCODE_PARSER
-
-    #if ENABLED(GCODE_CASE_INSENSITIVE)
-      FORCE_INLINE static char* strgchr(char *p, char g) {
-        auto uppercase = [](char c) {
-          return c + (WITHIN(c, 'a', 'z') ? 'A' - 'a' : 0);
-        };
-        const char d = uppercase(g);
-        for (char cc; (cc = uppercase(*p)); p++) if (cc == d) return p;
-        return nullptr;
-      }
-    #else
-      #define strgchr strchr
-    #endif
 
     // Code is found in the string. If not found, value_ptr is unchanged.
     // This allows "if (seen('A')||seen('B'))" to use the last-found value.
     static inline bool seen(const char c) {
-      char *p = strgchr(command_args, c);
+      char *p = strchr(command_args, c);
       const bool b = !!p;
-      if (b) value_ptr = valid_number(&p[1]) ? &p[1] : nullptr;
+      if (b) value_ptr = valid_float(&p[1]) ? &p[1] : nullptr;
       return b;
     }
 
     static inline bool seen_any() { return *command_args == '\0'; }
 
-    FORCE_INLINE static bool seen_test(const char c) { return (bool)strgchr(command_args, c); }
+    #define SEEN_TEST(L) !!strchr(command_args, L)
 
     // At least one of a list of code letters was seen
     static inline bool seen(const char * const str) {
       for (uint8_t i = 0; const char c = str[i]; i++)
-        if (seen_test(c)) return true;
+        if (SEEN_TEST(c)) return true;
       return false;
     }
 
@@ -226,14 +197,8 @@ public:
 
   // Seen any axis parameter
   static inline bool seen_axis() {
-    return seen_test('X') || seen_test('Y') || seen_test('Z') || seen_test('E');
+    return SEEN_TEST('X') || SEEN_TEST('Y') || SEEN_TEST('Z') || SEEN_TEST('E');
   }
-
-  #if ENABLED(GCODE_QUOTED_STRINGS)
-    static char* unescape_string(char* &src);
-  #else
-    FORCE_INLINE static char* unescape_string(char* &src) { return src; }
-  #endif
 
   // Populate all fields by parsing a single line of GCode
   // This uses 54 bytes of SRAM to speed up seen/value
@@ -244,17 +209,11 @@ public:
     static bool chain();
   #endif
 
-  // Test whether the parsed command matches the input
-  static inline bool is_command(const char ltr, const uint16_t num) { return command_letter == ltr && codenum == num; }
-
   // The code value pointer was set
-  FORCE_INLINE static bool has_value() { return !!value_ptr; }
+  FORCE_INLINE static bool has_value() { return value_ptr != nullptr; }
 
   // Seen a parameter with a value
   static inline bool seenval(const char c) { return seen(c) && has_value(); }
-
-  // The value as a string
-  static inline char* value_string() { return value_ptr; }
 
   // Float removes 'E' to prevent scientific notation interpretation
   static inline float value_float() {
@@ -282,7 +241,7 @@ public:
 
   // Code value for use as time
   static inline millis_t value_millis() { return value_ulong(); }
-  static inline millis_t value_millis_from_seconds() { return (millis_t)SEC_TO_MS(value_float()); }
+  static inline millis_t value_millis_from_seconds() { return (millis_t)(value_float() * 1000); }
 
   // Reduce to fewer bits
   static inline int16_t value_int() { return (int16_t)value_long(); }
@@ -295,6 +254,7 @@ public:
   // Units modes: Inches, Fahrenheit, Kelvin
 
   #if ENABLED(INCH_MODE_SUPPORT)
+
     static inline float mm_to_linear_unit(const float mm)     { return mm / linear_unit_factor; }
     static inline float mm_to_volumetric_unit(const float mm) { return mm / (volumetric_enabled ? volumetric_unit_factor : linear_unit_factor); }
 
@@ -303,9 +263,13 @@ public:
 
     static inline void set_input_linear_units(const LinearUnit units) {
       switch (units) {
+        case LINEARUNIT_INCH:
+          linear_unit_factor = 25.4f;
+          break;
+        case LINEARUNIT_MM:
         default:
-        case LINEARUNIT_MM:   linear_unit_factor =  1.0f; break;
-        case LINEARUNIT_INCH: linear_unit_factor = 25.4f; break;
+          linear_unit_factor = 1;
+          break;
       }
       volumetric_unit_factor = POW(linear_unit_factor, 3);
     }
@@ -323,16 +287,12 @@ public:
     static inline float mm_to_linear_unit(const float mm)     { return mm; }
     static inline float mm_to_volumetric_unit(const float mm) { return mm; }
 
-    static inline float linear_value_to_mm(const float v)               { return v; }
-    static inline float axis_value_to_mm(const AxisEnum, const float v) { return v; }
-    static inline float per_axis_value(const AxisEnum, const float v)   { return v; }
+    static inline float linear_value_to_mm(const float v)                    { return v; }
+    static inline float axis_value_to_mm(const AxisEnum axis, const float v) { UNUSED(axis); return v; }
+    static inline float per_axis_value(const AxisEnum axis, const float v)   { UNUSED(axis); return v; }
 
   #endif
 
-  static inline bool using_inch_units() { return mm_to_linear_unit(1.0f) != 1.0f; }
-
-  #define IN_TO_MM(I)        ((I) * 25.4f)
-  #define MM_TO_IN(M)        ((M) / 25.4f)
   #define LINEAR_UNIT(V)     parser.mm_to_linear_unit(V)
   #define VOLUMETRIC_UNIT(V) parser.mm_to_volumetric_unit(V)
 
@@ -342,7 +302,7 @@ public:
 
   #if ENABLED(TEMPERATURE_UNITS_SUPPORT)
 
-    static inline void set_input_temp_units(const TempUnit units) { input_temp_units = units; }
+    static inline void set_input_temp_units(TempUnit units) { input_temp_units = units; }
 
     #if HAS_LCD_MENU && DISABLED(DISABLE_M503)
 
@@ -401,12 +361,11 @@ public:
 
   #endif // !TEMPERATURE_UNITS_SUPPORT
 
-  static inline feedRate_t value_feedrate() { return MMM_TO_MMS(value_linear_units()); }
+  static inline float value_feedrate() { return value_linear_units(); }
 
-  void unknown_command_warning();
+  void unknown_command_error();
 
   // Provide simple value accessors with default option
-  static inline char*    stringval(const char c, char * const dval=nullptr) { return seenval(c) ? value_string()   : dval; }
   static inline float    floatval(const char c, const float dval=0.0)   { return seenval(c) ? value_float()        : dval; }
   static inline bool     boolval(const char c, const bool dval=false)   { return seenval(c) ? value_bool()         : (seen(c) ? true : dval); }
   static inline uint8_t  byteval(const char c, const uint8_t dval=0)    { return seenval(c) ? value_byte()         : dval; }
@@ -417,25 +376,6 @@ public:
   static inline float    linearval(const char c, const float dval=0)    { return seenval(c) ? value_linear_units() : dval; }
   static inline float    celsiusval(const char c, const float dval=0)   { return seenval(c) ? value_celsius()      : dval; }
 
-  #if ENABLED(MARLIN_DEV_MODE)
-
-    static inline uint8_t* hex_adr_val(const char c, uint8_t * const dval=nullptr) {
-      if (!seen(c) || *value_ptr != 'x') return dval;
-      uint8_t *out = nullptr;
-      for (char *vp = value_ptr + 1; HEXCHR(*vp) >= 0; vp++)
-        out = (uint8_t*)((uintptr_t(out) << 8) | HEXCHR(*vp));
-      return out;
-    }
-
-    static inline uint16_t hex_val(const char c, uint16_t const dval=0) {
-      if (!seen(c) || *value_ptr != 'x') return dval;
-      uint16_t out = 0;
-      for (char *vp = value_ptr + 1; HEXCHR(*vp) >= 0; vp++)
-        out = ((out) << 8) | HEXCHR(*vp);
-      return out;
-    }
-
-  #endif
 };
 
 extern GCodeParser parser;
